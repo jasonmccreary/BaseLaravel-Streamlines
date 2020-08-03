@@ -29,6 +29,8 @@ class EventServiceProvider extends ServiceProvider
     {
         parent::boot();
 
-        //
+        Event::listen('shift.purchased', function ($order) {
+            PerformShift::dispatch($order);
+        });
     }
 }
