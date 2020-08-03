@@ -2,24 +2,18 @@
 
 namespace App\Services;
 
-use GuzzleHttp\Client;
+use Illuminate\Support\Facades\Http;
 
 class Geocoder
 {
     public function countryForIp($ip)
     {
-        $client = new Client([
-            'base_uri' => 'https://freegeoip.app',
-            'timeout' => 1.0,
-        ]);
+        $response = Http::timeout(1)->get('https://freegeoip.app/json/' . $ip);
 
-        $response = $client->request('GET', 'json/'.$ip);
-        $data = json_decode($response->getBody(), true);
-
-        if ($data === false || empty($data['country_name'])) {
+        if ($response->failed() || empty($response['country_name'])) {
             return;
         }
 
-        return $data['country_name'];
+        return $response['country_name'];
     }
 }

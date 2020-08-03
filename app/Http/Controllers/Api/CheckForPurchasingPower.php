@@ -4,7 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Coupon;
 use App\Http\Controllers\Controller;
-use App\Services\Geocoder;
+use Facades\App\Services\Geocoder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\URL;
 
@@ -12,12 +12,11 @@ class CheckForPurchasingPower extends Controller
 {
     public function __invoke(Request $request)
     {
-        if (empty($request->server('REMOTE_ADDR'))) {
+        if (empty($request->getClientIp())) {
             abort(400);
         }
 
-        $geocoder = new Geocoder();
-        $country = $geocoder->countryForIp($request->server('REMOTE_ADDR'));
+        $country = Geocoder::countryForIp($request->getClientIp());
         if (is_null($country)) {
             abort(424);
         }
