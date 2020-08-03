@@ -2,123 +2,69 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\ExternalApiWrapper;
+use App\User;
 use DateTime;
 use DateTimeZone;
 use Illuminate\Http\Request;
-use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Auth;
-use App\User;
-use App\Services\ExternalApiWrapper;
-
 
 class ContactController extends Controller
 {
     protected $externalApi;
 
-    protected $contacts;
-
-    public function __construct()
+    public function __construct(ExternalApiWrapper $externalApi)
     {
-        $this->externalApi = new ExternalApiWrapper();
-
+        $this->externalApi = $externalApi;
     }
 
     public function index()
     {
-
-        //Get User Info
-        //$results = $externalApi->call('contacts', 'load', [605006,['FirstName','LastName']] );
-
         $user = Auth::user();
 
         $aff_info = $this->getAffInfo($user->api_id);
-        if(isset($aff_info[0]))
-        {
-            $totals = $this->externalApi->call('affiliates','affRunningTotals',[[$aff_info[0]['Id']]]);
-        $summary = $totals[0];
+        if (isset($aff_info[0])) {
+            $summary = $this->externalApi->generateRunningTotal($user->api_id);
+            $referrals = $this->externalApi->findReferrals(['AffiliateId' => $aff_info[0]['Id']], ['ContactId']);
+            sleep(.5);
 
-        $query = array('AffiliateId' => $aff_info[0]['Id']);
-        $return = array('ContactId');
-        $referrals = $this->externalApi->call('data', 'query', ['Referral',1000, 0, $query, $return, 'Id', false] );
-        sleep(.5);
+            $referralIds = [];
+            if (count($referrals)) {
+                foreach ($referrals as $key => $value) {
+                    array_push($referralIds, $value['ContactId']);
+                }
 
-        //return var_dump($referrals);
-        $referralIds = array();
-        if(count($referrals)){
-            foreach ($referrals as $key => $value) {
-                array_push($referralIds, $value['ContactId']);
+                $contacts = $this->externalApi->rawQuery(['Id', 'FirstName', 'LastName', 'Phone1', 'Email', 'DateCreated', '_Status2', '_AppsPending', '_AppsApproved', '_FundingAmountApprovedsofar', 'Groups'], ['Id' => $referralIds]);
+            } else {
+                $contacts = [];
             }
-            $queryData = ['Id' => $referralIds];
-            //return var_dump($queryData);
-
-            $selectedFields =['Id', 'FirstName', 'LastName', 'Phone1','Email','DateCreated', '_Status2', '_AppsPending', '_AppsApproved', '_FundingAmountApprovedsofar', 'Groups'];
-            $contacts = $this->externalApi->call('data', 'query', ['Contact',1000, 0, $queryData, $selectedFields, 'Id', false] );
-        }else{
-            $contacts = array();
-        }
-        //return var_dump($referralIds);
-
-        //return var_dump($contacts);
-
-        //return var_dump($summary);
         }
 
-        if(isset($contacts)){
-            return view('home' , ['aff_info' => $aff_info, 'contacts' => $contacts, 'user' => $user, 'summary' =>  $summary, 'ids' => $referralIds] );
-        }else{
-            $contacts = array();
-            $summary = array();
-            $referralIds = array();
-
-            return view('home' , ['aff_info' => $aff_info, 'contacts' => $contacts, 'user' => $user, 'summary' =>  $summary, 'ids' => $referralIds] );
+        if (isset($contacts)) {
+            return view('home', ['aff_info' => $aff_info, 'contacts' => $contacts, 'user' => $user, 'summary' => $summary, 'ids' => $referralIds]);
+        } else {
+            return view('home', ['aff_info' => $aff_info, 'contacts' => [], 'user' => $user, 'summary' => [], 'ids' => []]);
         }
-
-
     }
 
-    public function profile()
+    public function create(Request $request)
     {
-            $user = Auth::user();
-
-             $queryData = ['Id' => $user['api_id']];
-            $selectedFields =['Id', 'FirstName', 'LastName', 'Phone1','Email'];
-            $results = $this->externalApi->call('data', 'query', ['Contact',1, 0, $queryData, $selectedFields, 'Id', false] );
-            $user['inf'] = $results[0];
-
-            //var_dump($results);
-
-            return view('profile', ['user' => $user]);
-    }
-
-    public function save(Request $request)
-    {
-        $data = $request->all();
-        $user = Auth::user();
-
-        $save = User::find($user['id']);
-
-        $name = $data['FirstName'] . " " . $data['LastName'];
-
-        $save->name =  $name;
-        $save->email = $data['Email'];
-
-        $save->save();
-
-        $contact = array('FirstName' => $data['FirstName'], 'LastName' => $data['LastName'], 'Email' => $data['Email'], 'Phone1' => $data['Phone1'] );
-        $contact_id = $this->externalApi->call('contacts', 'update',[$user['api_id'], $contact] );
-
-        //$this->externalApi->call('emails', 'optIn',[$data['Email'],'Added by one of our referral partners to recieve more info'] );
-
-        return redirect('/profile//');
-
-    }
-
-    public function pass(Request $request)
-    {
-        $this->validate($request, [
-            'password' => 'required|min:6|confirmed'
+        return view('profile', [
+            'user' => $this->externalApi->rawQuery(['Id', 'FirstName', 'LastName', 'Phone1', 'Email'], ['Id' => $request->user()['api_id']])
         ]);
+    }
 
+    public function store(ContactSaveRequest $request)
+    {
+        $request->user()->updateContactInformation($request);
+
+        $this->externalApi->updateContact($request->user());
+
+        return redirect('/profile/');
+    }
+
+    public function update(UpdatePasswordRequest $request)
+    {
         $data = $request->all();
         $user = Auth::user();
 
@@ -128,59 +74,55 @@ class ContactController extends Controller
 
         $save->save();
 
-        $contact = array('Password' => $data['password']);
-        $contact_id = $this->externalApi->call('contacts', 'update',[$user['api_id'], $contact] );
+        $contact = ['Password' => $data['password']];
+        $contact_id = $this->externalApi->call('contacts', 'update', [$user['api_id'], $contact]);
 
         return redirect('/profile//');
     }
 
     private function getAffInfo($api_id)
-        {
-                    //Get the users Aff info
+    {
         $queryData = ['ContactId' => $api_id];
         $selectedFields = ['Id', 'AffCode'];
-            $results = $this->externalApi->call('data', 'query', ['Affiliate',1, 0, $queryData, $selectedFields, 'Id', false] );
+        $results = $this->externalApi->call('data', 'query', ['Affiliate', 1, 0, $queryData, $selectedFields, 'Id', false]);
 
-            return $results;
+        return $results;
+    }
+
+    private function getReferrals($comissions)
+    {
+        $specialData = [];
+
+        foreach ($comissions as $comission => $value) {
+            $queryData = ['Id' => $value['ContactId']];
+            $selectedFields = ['Id', 'FirstName', 'LastName', 'Phone1', 'Email', 'DateCreated', '_Status2', '_AppsPending', '_AppsApproved', '_FundingAmountApprovedsofar', 'Groups'];
+            $results = $this->externalApi->call('data', 'query', ['Contact', 1000, 0, $queryData, $selectedFields, 'Id', false]);
+            if (isset($results[0])) {
+                $specialData[] = $results[0];
+            }
         }
 
-        private function getReferrals($comissions)
-        {
-            $specialData = array();
-
-            foreach ($comissions as $comission => $value) {
-                $queryData = ['Id' => $value['ContactId']];
-                $selectedFields =['Id', 'FirstName', 'LastName', 'Phone1','Email','DateCreated', '_Status2', '_AppsPending', '_AppsApproved', '_FundingAmountApprovedsofar', 'Groups'];
-                $results = $this->externalApi->call('data', 'query', ['Contact',1000, 0, $queryData, $selectedFields, 'Id', false] );
-                if (isset($results[0]))
-                {
-                    $specialData[] = $results[0];
+        foreach ($specialData as $key => $value) {
+            $nextKey = $key + 1;
+            if (isset($specialData[$nextKey])) {
+                if ($specialData[$key] == $specialData[$nextKey]) {
+                    unset($specialData[$key]);
                 }
             }
-
-            //Clean Up Dups
-            foreach ($specialData as $key => $value) {
-                $nextKey = $key + 1;
-                    if(isset($specialData[$nextKey])){
-                        if($specialData[$key] == $specialData[$nextKey]){
-                        unset($specialData[$key]);
-                    }
-                }
-            }
-
-            return $specialData;
-
         }
 
-        private function getUserComissionInfo($affId)
-        {
-            //Get the users Comission Info
-            $startDate = date('Y-m-d') . ' -12 months';
-                $infStartDate = new DateTime($startDate .' 00:00:00',new DateTimeZone('America/New_York'));
-                $infEndDate = new DateTime(date('Y-m-d') .' 00:00:00',new DateTimeZone('America/New_York'));
-                $comissions = $this->externalApi->call('affiliates','affCommissions',[  $affId, $infStartDate, $infEndDate ]);
+        return $specialData;
 
-                return $comissions;
-        }
+    }
+
+    private function getUserComissionInfo($affId)
+    {
+        $startDate = date('Y-m-d') . ' -12 months';
+        $infStartDate = new DateTime($startDate . ' 00:00:00', new DateTimeZone('America/New_York'));
+        $infEndDate = new DateTime(date('Y-m-d') . ' 00:00:00', new DateTimeZone('America/New_York'));
+        $comissions = $this->externalApi->call('affiliates', 'affCommissions', [$affId, $infStartDate, $infEndDate]);
+
+        return $comissions;
+    }
 
 }
